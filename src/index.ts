@@ -122,6 +122,7 @@ export class UltravoxSession extends EventTarget {
 
   private readonly audioContext: AudioContext;
   private readonly experimentalMessages: Set<string>;
+  private noiseSuppressorNode?: AudioWorkletNode;
 
   private _isMicMuted: boolean = false;
   private _isSpeakerMuted: boolean = false;
@@ -141,6 +142,8 @@ export class UltravoxSession extends EventTarget {
     super();
     this.audioContext = audioContext || new AudioContext();
     this.experimentalMessages = experimentalMessages || new Set();
+    // Load noise suppressor worklet
+    this.audioContext.audioWorklet.addModule('noise-suppressor.worklet.js').catch(console.error);
   }
 
   /** Returns all transcripts for the current session. */
@@ -284,8 +287,8 @@ export class UltravoxSession extends EventTarget {
       throw new Error('Cannot muteSpeaker.');
     }
     this._isSpeakerMuted = true;
-    this.room.remoteParticipants.forEach((participant) => {
-      participant.audioTrackPublications.forEach((publication) => {
+    this.room.remoteParticipants.forEach((participant: any) => {
+      participant.audioTrackPublications.forEach((publication: any) => {
         publication.track?.setMuted(true);
       });
     });
@@ -297,8 +300,8 @@ export class UltravoxSession extends EventTarget {
       throw new Error('Cannot unmuteSpeaker.');
     }
     this._isSpeakerMuted = false;
-    this.room.remoteParticipants.forEach((participant) => {
-      participant.audioTrackPublications.forEach((publication) => {
+    this.room.remoteParticipants.forEach((participant: any) => {
+      participant.audioTrackPublications.forEach((publication: any) => {
         publication.track?.setMuted(false);
       });
     });
@@ -346,6 +349,15 @@ export class UltravoxSession extends EventTarget {
     this.audioElement.play();
     if (this.localAudioTrack.mediaStream) {
       this.micSourceNode = this.audioContext.createMediaStreamSource(this.localAudioTrack.mediaStream);
+
+      // Create and connect noise suppressor
+      try {
+        this.noiseSuppressorNode = new AudioWorkletNode(this.audioContext, 'noise-suppressor');
+        this.micSourceNode.connect(this.noiseSuppressorNode);
+        this.noiseSuppressorNode.connect(this.audioContext.destination);
+      } catch (error) {
+        console.error('Failed to initialize noise suppressor:', error);
+      }
     }
 
     const opts = { name: 'audio', simulcast: false, source: Track.Source.Microphone };
@@ -365,6 +377,8 @@ export class UltravoxSession extends EventTarget {
     this.room = undefined;
     this.socket?.close();
     this.socket = undefined;
+    this.noiseSuppressorNode?.disconnect();
+    this.noiseSuppressorNode = undefined;
     this.micSourceNode?.disconnect();
     this.micSourceNode = undefined;
     this.agentSourceNode?.disconnect();
