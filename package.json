@@ -13,12 +13,13 @@
     "exports": {
       ".": "./src/index.ts",
       "./package.json": "./package.json",
-      "./noise-suppressor.worklet.js": "./src/noise-suppressor.worklet.js"
+      "./noise-suppressor.worklet.js": "./src/noise-suppressor.worklet.js",
+      "./version": "./src/version.ts"
     }
   },
   "scripts": {
     "prepublishOnly": "node -p \"'export const ULTRAVOX_SDK_VERSION = ' + JSON.stringify(require('./package.json').version) + ';'\" > src/version.ts",
-    "build": "pnpm run prepare && pnpm run format",
+    "build": "node -p \"'export const ULTRAVOX_SDK_VERSION = ' + JSON.stringify(require('./package.json').version) + ';'\" > src/version.ts && pnpm run prepare && pnpm run format",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "tshy",
@@ -53,6 +54,12 @@
       "import": {
         "types": "./dist/esm/noise-suppressor.worklet.d.ts",
         "default": "./dist/esm/noise-suppressor.worklet.js"
+      }
+    },
+    "./version": {
+      "import": {
+        "types": "./dist/esm/version.d.ts",
+        "default": "./dist/esm/version.js"
       }
     }
   },
