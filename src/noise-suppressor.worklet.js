@@ -1,137 +1,112 @@
+class FFT {
+    constructor(size) {
+        this.size = size;
+        this.real = new Float32Array(size);
+        this.imag = new Float32Array(size);
+        this.window = new Float32Array(size);
+
+        // Create Hanning window
+        for (let i = 0; i < size; i++) {
+            this.window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (size - 1)));
+        }
+    }
+
+    transform(input) {
+        // Apply window and prepare real/imag arrays
+        for (let i = 0; i < this.size; i++) {
+            this.real[i] = input[i] * this.window[i];
+            this.imag[i] = 0;
+        }
+
+        // Cooley-Tukey FFT
+        let n = this.size;
+        for (let i = 0; i < n; i++) {
+            if (i < this.reverseBits(i, n)) {
+                [this.real[i], this.real[this.reverseBits(i, n)]] =
+                    [this.real[this.reverseBits(i, n)], this.real[i]];
+                [this.imag[i], this.imag[this.reverseBits(i, n)]] =
+                    [this.imag[this.reverseBits(i, n)], this.imag[i]];
+            }
+        }
+
+        for (let size = 2; size <= n; size *= 2) {
+            const halfsize = size / 2;
+            const tablestep = n / size;
+            for (let i = 0; i < n; i += size) {
+                for (let j = i, k = 0; j < i + halfsize; j++, k += tablestep) {
+                    const thetaR = Math.cos(-2 * Math.PI * k / n);
+                    const thetaI = Math.sin(-2 * Math.PI * k / n);
+                    const tmpR = this.real[j + halfsize];
+                    const tmpI = this.imag[j + halfsize];
+
+                    const targetR = thetaR * tmpR - thetaI * tmpI;
+                    const targetI = thetaR * tmpI + thetaI * tmpR;
+
+                    this.real[j + halfsize] = this.real[j] - targetR;
+                    this.imag[j + halfsize] = this.imag[j] - targetI;
+                    this.real[j] += targetR;
+                    this.imag[j] += targetI;
+                }
+            }
+        }
+
+        // Calculate magnitude spectrum
+        const magnitude = new Float32Array(this.size / 2);
+        for (let i = 0; i < this.size / 2; i++) {
+            magnitude[i] = Math.sqrt(
+                this.real[i] * this.real[i] +
+                this.imag[i] * this.imag[i]
+            );
+        }
+        return magnitude;
+    }
+
+    reverseBits(x, n) {
+        let result = 0;
+        let power = Math.log2(n);
+        for (let i = 0; i < power; i++) {
+            result = (result << 1) | (x & 1);
+            x >>= 1;
+        }
+        return result;
+    }
+}
+
 class NoiseSuppressor extends AudioWorkletProcessor {
     constructor() {
         super();
-
-        // Configurable parameters with defaults
-        this.config = {
-            fftSize: 2048,
-            minNoiseFloor: 0.001,
-            initialNoiseFloor: 0.003,
-            noiseFloorSmoothing: 0.003,
-            voiceBandLow: 85,    // Hz - typical human voice lowest frequency
-            voiceBandHigh: 3400, // Hz - typical human voice highest frequency
-            smoothingFactor: 0.95,
-            rmsWindowSize: 4096
-        };
-
-        // State variables
-        this.lastValues = new Float32Array(128);
-        this.rmsWindow = new Float32Array(this.config.rmsWindowSize);
-        this.rmsIndex = 0;
-        this.lastRMS = 0;
+        this.fft = new FFT(2048);
+        this.buffer = new Float32Array(2048);
+        this.bufferIndex = 0;
+        this.lastMagnitudes = new Float32Array(1024);
+        this.noiseProfile = new Float32Array(1024).fill(0.001);
         this.voiceActive = false;
-        this.noiseFloor = this.config.initialNoiseFloor;
-        this.rmsSum = 0;
 
-        // FFT related initialization
-        this.fftBuffer = new Float32Array(this.config.fftSize);
-        this.fftBufferIndex = 0;
-
-        // Voice detection history for better stability
-        this.voiceDetectionHistory = new Array(10).fill(false);
-
-        // Spectral features
-        this.lastSpectralFlux = 0;
-        this.spectralPeaks = [];
-
-        // Port for debugging and parameter adjustment
-        this.port.onmessage = this.handleMessage.bind(this);
+        // Voice frequency ranges (in bins, assuming 44.1kHz sampling)
+        this.voiceLowBin = Math.floor(85 * 2048 / 44100);    // 85Hz
+        this.voiceHighBin = Math.floor(3400 * 2048 / 44100); // 3400Hz
     }
 
-    // Handle messages from main thread for parameter adjustment
-    handleMessage(event) {
-        const { type, data } = event.data;
-        if (type === 'updateConfig') {
-            this.config = { ...this.config, ...data };
-        }
-    }
+    detectVoice(magnitudes) {
+        let voiceEnergy = 0;
+        let noiseEnergy = 0;
 
-    // Enhanced RMS calculation with weighted frequency bands
-    calculateRMS(input) {
-        this.rmsSum -= this.rmsWindow[this.rmsIndex];
-        this.rmsWindow[this.rmsIndex] = input * input;
-        this.rmsSum += this.rmsWindow[this.rmsIndex];
-        this.rmsIndex = (this.rmsIndex + 1) % this.rmsWindow.length;
-
-        const rms = Math.sqrt(this.rmsSum / this.rmsWindow.length);
-        this.lastRMS = this.lastRMS * this.config.smoothingFactor +
-            rms * (1 - this.config.smoothingFactor);
-        return this.lastRMS;
-    }
-
-    // Spectral flux calculation for voice activity detection
-    calculateSpectralFlux(fftData) {
-        let flux = 0;
-        for (let i = 0; i < fftData.length / 2; i++) {
-            const diff = Math.abs(fftData[i]) - Math.abs(this.lastSpectralFlux[i] || 0);
-            flux += diff > 0 ? diff : 0;
-        }
-        this.lastSpectralFlux = fftData.slice();
-        return flux;
-    }
-
-    // Enhanced voice detection using multiple features
-    detectVoiceActivity(input, rms) {
-        // Collect FFT data
-        this.fftBuffer[this.fftBufferIndex] = input;
-        this.fftBufferIndex = (this.fftBufferIndex + 1) % this.config.fftSize;
-
-        if (this.fftBufferIndex === 0) {
-            // Perform FFT analysis when buffer is full
-            const fftData = this.performFFT(this.fftBuffer);
-            const spectralFlux = this.calculateSpectralFlux(fftData);
-            const voiceBandEnergy = this.calculateVoiceBandEnergy(fftData);
-
-            // Multiple feature voice detection
-            const isVoice = (
-                rms > this.noiseFloor * 4 ||
-                spectralFlux > this.config.spectralFluxThreshold ||
-                voiceBandEnergy > this.config.voiceBandThreshold
-            );
-
-            // Update voice detection history
-            this.voiceDetectionHistory.shift();
-            this.voiceDetectionHistory.push(isVoice);
-
-            // Require multiple consecutive detections for stability
-            const voiceDetectionCount = this.voiceDetectionHistory
-                .filter(v => v).length;
-
-            return voiceDetectionCount > this.voiceDetectionHistory.length * 0.6;
+        // Calculate energy in voice frequency range
+        for (let i = this.voiceLowBin; i < this.voiceHighBin; i++) {
+            if (magnitudes[i] > this.noiseProfile[i] * 2) {
+                voiceEnergy += magnitudes[i];
+            }
+            noiseEnergy += this.noiseProfile[i];
         }
 
-        return this.voiceActive; // Return last state if FFT not ready
-    }
-
-    // Calculate energy in the voice frequency band
-    calculateVoiceBandEnergy(fftData) {
-        const binSize = sampleRate / this.config.fftSize;
-        const lowBin = Math.floor(this.config.voiceBandLow / binSize);
-        const highBin = Math.ceil(this.config.voiceBandHigh / binSize);
-
-        let energy = 0;
-        for (let i = lowBin; i <= highBin; i++) {
-            energy += Math.abs(fftData[i]) ** 2;
+        // Update noise profile during silence
+        if (voiceEnergy < noiseEnergy * 1.5) {
+            for (let i = 0; i < magnitudes.length; i++) {
+                this.noiseProfile[i] = this.noiseProfile[i] * 0.95 + magnitudes[i] * 0.05;
+            }
         }
-        return energy;
-    }
 
-    // Adaptive noise floor with enhanced learning
-    updateNoiseFloor(rms, isVoice) {
-        if (!isVoice) {
-            // Update noise floor only during silence
-            const adaptationRate = this.config.noiseFloorSmoothing *
-                (rms < this.noiseFloor ? 2 : 1);
-
-            this.noiseFloor = (1 - adaptationRate) * this.noiseFloor +
-                adaptationRate * rms;
-
-            // Ensure noise floor stays within bounds
-            this.noiseFloor = Math.max(
-                this.config.minNoiseFloor,
-                Math.min(this.noiseFloor, this.config.maxNoiseFloor)
-            );
-        }
+        return voiceEnergy > noiseEnergy * 2;
     }
 
     process(inputs, outputs) {
@@ -140,141 +115,31 @@ class NoiseSuppressor extends AudioWorkletProcessor {
 
         if (!input || !output || !input[0] || !output[0]) return true;
 
-        for (let channel = 0; channel < input.length; channel++) {
-            const inputChannel = input[channel];
-            const outputChannel = output[channel];
+        const inputChannel = input[0];
+        const outputChannel = output[0];
 
-            for (let i = 0; i < inputChannel.length; i++) {
-                const currentValue = inputChannel[i];
-                const rms = this.calculateRMS(currentValue);
-                const absValue = Math.abs(currentValue);
+        // Fill buffer and process when full
+        for (let i = 0; i < inputChannel.length; i++) {
+            this.buffer[this.bufferIndex] = inputChannel[i];
+            this.bufferIndex++;
 
-                // Enhanced voice detection
-                const isVoice = this.detectVoiceActivity(currentValue, rms);
+            if (this.bufferIndex >= this.buffer.length) {
+                // Perform FFT analysis
+                const magnitudes = this.fft.transform(this.buffer);
+                this.voiceActive = this.detectVoice(magnitudes);
+                this.bufferIndex = 0;
+            }
 
-                // Update noise floor
-                this.updateNoiseFloor(rms, isVoice);
-
-                // Smooth the signal amplitude
-                this.lastValues[i] = this.lastValues[i] * this.config.smoothingFactor +
-                    absValue * (1 - this.config.smoothingFactor);
-
-                // Apply suppression
-                if (isVoice) {
-                    const signalToNoise = this.lastValues[i] / this.noiseFloor;
-                    const gain = this.calculateGain(signalToNoise);
-                    outputChannel[i] = currentValue * gain;
-                } else {
-                    outputChannel[i] = currentValue * 0.1; // Residual noise for natural sound
-                }
+            // Apply suppression based on voice detection
+            if (this.voiceActive) {
+                outputChannel[i] = inputChannel[i];
+            } else {
+                outputChannel[i] = inputChannel[i] * 0.1; // Reduce non-voice by 90%
             }
         }
 
         return true;
     }
-
-    // Calculate adaptive gain based on signal-to-noise ratio (continued)
-    calculateGain(signalToNoise) {
-        const minGain = 0.1;
-        const maxGain = 1.0;
-        const threshold = 4.0;
-
-        if (signalToNoise <= threshold) {
-            return minGain;
-        }
-
-        // Smooth transition using sigmoid function
-        const normalizedSnr = (signalToNoise - threshold) / threshold;
-        const gain = 1 / (1 + Math.exp(-4 * normalizedSnr));
-
-        return minGain + (maxGain - minGain) * gain;
-    }
-
-    // Perform FFT analysis
-    performFFT(buffer) {
-        // Simple FFT implementation
-        // Note: In production, you might want to use a more optimized FFT library
-        const fft = new Float32Array(this.config.fftSize);
-
-        // Apply Hanning window
-        for (let i = 0; i < this.config.fftSize; i++) {
-            const window = 0.5 * (1 - Math.cos(2 * Math.PI * i / this.config.fftSize));
-            fft[i] = buffer[i] * window;
-        }
-
-        // Perform FFT (simplified version)
-        // In real implementation, use Web Audio's built-in AnalyserNode or a proper FFT library
-        return this.computeFFT(fft);
-    }
-
-    // Helper method to detect zero-crossing rate
-    calculateZeroCrossings(buffer, length) {
-        let crossings = 0;
-        for (let i = 1; i < length; i++) {
-            if ((buffer[i] >= 0 && buffer[i - 1] < 0) ||
-                (buffer[i] < 0 && buffer[i - 1] >= 0)) {
-                crossings++;
-            }
-        }
-        return crossings;
-    }
-
-    // Method to export debug data
-    exportDebugData() {
-        this.port.postMessage({
-            type: 'debug',
-            data: {
-                noiseFloor: this.noiseFloor,
-                rms: this.lastRMS,
-                voiceActive: this.voiceActive,
-                voiceDetectionHistory: [...this.voiceDetectionHistory]
-            }
-        });
-    }
 }
 
-// Add configuration options
-const defaultConfig = {
-    numberOfChannels: 1,
-    processorOptions: {
-        fftSize: 2048,
-        minNoiseFloor: 0.001,
-        initialNoiseFloor: 0.003,
-        noiseFloorSmoothing: 0.003,
-        voiceBandLow: 85,
-        voiceBandHigh: 3400,
-        smoothingFactor: 0.95,
-        rmsWindowSize: 4096,
-        spectralFluxThreshold: 0.5,
-        voiceBandThreshold: 0.3,
-        maxNoiseFloor: 0.01
-    }
-};
-
-// Register the processor
-registerProcessor('noise-suppressor', NoiseSuppressor, defaultConfig);
-
-// Usage example in main thread:
-/*
-const context = new AudioContext();
-await context.audioWorklet.addModule('noise-suppressor.js');
-
-const noiseSuppressor = new AudioWorkletNode(context, 'noise-suppressor', {
-    processorOptions: {
-        // Custom configuration if needed
-        voiceBandLow: 100,
-        voiceBandHigh: 3000,
-        smoothingFactor: 0.98
-    }
-});
-
-// Debug listener
-noiseSuppressor.port.onmessage = (event) => {
-    if (event.data.type === 'debug') {
-        console.log('Noise Suppressor Debug:', event.data.data);
-    }
-};
-
-// Connect to audio graph
-source.connect(noiseSuppressor).connect(context.destination);
-*/
+registerProcessor('noise-suppressor', NoiseSuppressor);
