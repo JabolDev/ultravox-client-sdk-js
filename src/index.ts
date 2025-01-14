@@ -353,8 +353,12 @@ export class UltravoxSession extends EventTarget {
       // Create and connect noise suppressor
       try {
         this.noiseSuppressorNode = new AudioWorkletNode(this.audioContext, 'noise-suppressor');
+        // Connect mic -> noise suppressor -> mediaStream destination for clean audio
+        const destination = this.audioContext.createMediaStreamDestination();
         this.micSourceNode.connect(this.noiseSuppressorNode);
-        this.noiseSuppressorNode.connect(this.audioContext.destination);
+        this.noiseSuppressorNode.connect(destination);
+        // Update the mediaStream to use the processed audio
+        this.localAudioTrack.mediaStream = destination.stream;
       } catch (error) {
         console.error('Failed to initialize noise suppressor:', error);
       }
