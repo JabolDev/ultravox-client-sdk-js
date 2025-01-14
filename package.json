@@ -4,7 +4,8 @@
   "private": false,
   "files": [
     "dist",
-    "src/noise-suppressor.worklet.js"
+    "src/noise-suppressor.worklet.js",
+    "src/version.ts"
   ],
   "tshy": {
     "dialects": [
@@ -18,11 +19,13 @@
     }
   },
   "scripts": {
-    "prepublishOnly": "node -p \"'export const ULTRAVOX_SDK_VERSION = ' + JSON.stringify(require('./package.json').version) + ';'\" > src/version.ts",
-    "build": "node -p \"'export const ULTRAVOX_SDK_VERSION = ' + JSON.stringify(require('./package.json').version) + ';'\" > src/version.ts && pnpm run prepare && pnpm run format",
+    "version": "node -p \"'export const ULTRAVOX_SDK_VERSION = ' + JSON.stringify(require('./package.json').version) + ';'\" > src/version.ts",
+    "prepublishOnly": "npm run version",
+    "prepack": "npm run version",
+    "prepare": "npm run version && tshy",
+    "build": "npm run version && pnpm run prepare && pnpm run format",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "prepare": "tshy",
     "serve-example": "http-server"
   },
   "dependencies": {
