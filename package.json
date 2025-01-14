@@ -3,7 +3,8 @@
   "version": "0.3.4",
   "private": false,
   "files": [
-    "dist"
+    "dist",
+    "src/noise-suppressor.worklet.js"
   ],
   "tshy": {
     "dialects": [
@@ -11,7 +12,8 @@
     ],
     "exports": {
       ".": "./src/index.ts",
-      "./package.json": "./package.json"
+      "./package.json": "./package.json",
+      "./noise-suppressor.worklet.js": "./src/noise-suppressor.worklet.js"
     }
   },
   "scripts": {
@@ -46,7 +48,13 @@
         "default": "./dist/esm/index.js"
       }
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./noise-suppressor.worklet.js": {
+      "import": {
+        "types": "./dist/esm/noise-suppressor.worklet.d.ts",
+        "default": "./dist/esm/noise-suppressor.worklet.js"
+      }
+    }
   },
   "module": "./dist/esm/index.js"
 }

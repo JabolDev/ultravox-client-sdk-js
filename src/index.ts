@@ -143,7 +143,7 @@ export class UltravoxSession extends EventTarget {
     this.audioContext = audioContext || new AudioContext();
     this.experimentalMessages = experimentalMessages || new Set();
     // Load noise suppressor worklet
-    this.audioContext.audioWorklet.addModule('noise-suppressor.worklet.js').catch(console.error);
+    this.audioContext.audioWorklet.addModule('ultravox-client/noise-suppressor.worklet.js').catch(console.error);
   }
 
   /** Returns all transcripts for the current session. */
